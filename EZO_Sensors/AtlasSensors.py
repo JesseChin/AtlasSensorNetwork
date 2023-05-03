@@ -1,73 +1,134 @@
 import board, busio
 import time
 
-global i2c
-i2c = busio.I2C(scl=board.IO5, sda=board.IO6, frequency=400000)
 
-while not i2c.try_lock():
-    pass
+class i2cHelper(object):
+    _i2c: busio.I2C
+
+    def __init__(self, scl, sda, frequency):
+        self._i2c = busio.I2C(scl, sda, frequency)
+        while not self._i2c.try_lock():
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._i2c.unlock()
+
+    def deinit(self):
+        self._i2c.unlock()
+
+    def _i2c_write(self, address: int, message: str,) -> None:
+        self._i2c.writeto(address, message)
+
+    def _i2c_write_read(
+        self,
+        address: int,
+        message: str,
+        waitTime: float,
+        buf_size: int = 40,
+        print_output: bool = False,
+    ):
+        self._i2c_write(address, message)
+        result = bytearray(buf_size)
+        time.sleep(waitTime)
+        self._i2c.readfrom_into(address, result)
+        if print_output == True:
+            print(result.decode("utf-8"))
+        return result
+
+    def show_name(self, address: int) -> None:
+        """Show the name of the i2c device with the specified address"""
+        res = self._i2c_write_read(address, "Name,?", 0.3, 24)
+        print("name:", res.decode("utf-8"))
+
+    def identify_devices(self) -> None:
+        """Display all devices in the system"""
+        for address in self._i2c.scan():
+            res = self._i2c_write_read(address, "i", 0.3, 13)
+            print("Device information:", res.decode("utf-8"))
+            self.show_name(address)
+            print("i2c address:", address)
 
 
-def show_name(address: int) -> None:
-    """Show the name of the i2c device with the specified address"""
-    i2c.writeto(address, "Name,?")
-    result = bytearray(24)
-    time.sleep(0.3)
-    i2c.readfrom_into(address, result)
-    print("name:", result.decode("utf-8"))
-
-
-def identify_devices() -> None:
-    """Display all devices in the system"""
-    for address in i2c.scan():
-        i2c.writeto(address, "i")
-        result = bytearray(13)
-        time.sleep(0.3)
-        i2c.readfrom_into(address, result)
-        # time.sleep(0.3)
-        print("Device information:", result.decode("utf-8"))
-        show_name(address)
-        print("i2c address:", address)
-
-
-class generic_ezo:
+class generic_ezo(object):
     """Generic EZO class for reading from """
 
-    def __init__(self, address: int, print_res: bool = False) -> None:
-        self.address = address
-        self.print_res = print_res
+    _i2c: busio.I2C
+
+    def __init__(self, address: int, i2c, print_res: bool = False) -> None:
+        self._address = address
+        self._print_res = print_res
+        self._i2c = i2c
+
+    def _i2c_write(self, address: int, message: str,) -> None:
+        self._i2c.writeto(address, message)
+
+    def _i2c_write_read(
+        self,
+        address: int,
+        message: str,
+        waitTime: float,
+        buf_size: int = 40,
+        print_output: bool = False,
+    ):
+        self._i2c_write(address, message)
+        result = bytearray(buf_size)
+        time.sleep(waitTime)
+        self._i2c.readfrom_into(address, result)
+        if print_output == True:
+            print(result.decode("utf-8"))
+        return result
 
     def read_bytearray(self) -> bytearray:
-        """Reads the ORP, outputs as a byte array"""
-        i2c.writeto(self.address, "R")
-        time.sleep(0.9)
-        result = bytearray(7)
-        i2c.readfrom_into(self.address, result)
-        if self.print_res is True:
-            print(result)
-        return result
+        """Reads the device, outputs as a byte array"""
+        return self._i2c_write_read(self._address, "R", 0.9, 7, self._print_res)
 
     def read(self) -> float:
         """Reads the ORP, decodes to float"""
-        i2c.writeto(self.address, "R")
-        time.sleep(0.9)
-        result = bytearray(7)
-        i2c.readfrom_into(self.address, result)
-        if self.print_res is True:
-            print(result)
+        result = self._i2c_write_read(self._address, "R", 0.9, 7, self._print_res)
         result1 = result[1:5]
-        result1_decode = result1.decode("utf-8")
-        result_float = float(result1_decode)
-        return result_float
+        result_decode = float(result1.decode("utf-8"))
+        return result_decode
 
     def sleep(self) -> None:
-        i2c.writeto(self.address, "Sleep")
+        self._i2c.writeto(self._address, "Sleep")
 
     def status_bytearray(self) -> bytearray:
-        i2c.writeto(self.address, "Status")
+        self._i2c.writeto(self._address, "Status")
         time.sleep(0.3)
         result = bytearray(17)
-        i2c.readfrom_into(self.address, result)
-        if self.print_res is True:
+        self._i2c.readfrom_into(self._address, result)
+        if self._print_res is True:
+            print(result)
+        return result
+
+
+class ph_ezo(generic_ezo):
+
+    DEFAULT_ADDRESS = 99
+
+    def __init__(self, address: int, i2c, print_res: bool = False) -> None:
+        super(ph_ezo, self).__init__((address or self.DEFAULT_ADDRESS), i2c, print_res)
+
+    def calibrate(self, points="low") -> bytearray:
+        result = bytearray(2)
+        if points == "low":
+            self._i2c.writeto(self._address, "Cal,low,4.00")
+            time.sleep(0.9)
+            self._i2c.readfrom_into(self._address, result)
+
+        if points == "mid":
+            self._i2c.writeto(self._address, "Cal,mid,7.00")
+            time.sleep(0.9)
+            self._i2c.readfrom_into(self._address, result)
+
+        if points == "high":
+            self._i2c.writeto(self._address, "Cal,high,10.00")
+            time.sleep(0.9)
+            self._i2c.readfrom_into(self._address, result)
+
+        if self._print_res is True:
             print(result)
         return result
